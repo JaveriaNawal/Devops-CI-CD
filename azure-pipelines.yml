@@ -32,22 +32,22 @@ variables:
     value: "1"
   # ACR details (non-secret)
   - name: ACR_NAME
-    value: "acrtaskappjaveria"
+    value: "taskappacrstaging"
   - name: ACR_LOGIN_SERVER
-    value: "acrtaskappjaveria.azurecr.io"
+    value: "taskappacrstaging.azurecr.io"
   - name: BACKEND_IMAGE_NAME
     value: "taskapp-backend"
   - name: FRONTEND_IMAGE_NAME
     value: "taskapp-frontend"
   # Azure targets
   - name: RESOURCE_GROUP
-    value: "rg-taskapp-javeria-eus-01"
+    value: "taskapp-staging-rg"
   - name: APP_SERVICE_NAME
-    value: "app-taskapp-backend-javeria-eus-01"
-  - name: STATIC_WEB_APP_NAME
-    value: "stapp-taskapp-frontend-javeria-eus-01"
+    value: "taskapp-staging-backend"
+  - name: FRONTEND_APP_NAME
+    value: "taskapp-staging-swa"
   - name: AZURE_LOCATION
-    value: "eastus"
+    value: "southeastasia"
   # Cache keys
   - name: BACKEND_CACHE_KEY
     value: 'npm-backend | "$(Agent.OS)" | backend/package-lock.json'
