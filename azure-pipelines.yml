@@ -42,10 +42,8 @@ variables:
   # Azure targets
   - name: RESOURCE_GROUP
     value: "taskapp-staging-rg"
-  - name: APP_SERVICE_NAME
-    value: "taskapp-staging-backend"
-  - name: FRONTEND_APP_NAME
-    value: "taskapp-staging-swa"
+  - name: APP_NAME
+    value: "taskapp"
   - name: AZURE_LOCATION
     value: "southeastasia"
   # Cache keys
@@ -236,7 +234,7 @@ stages:
                     acrLoginServer: $(ACR_LOGIN_SERVER)
                     imageName: $(BACKEND_IMAGE_NAME)
                     imageTag: $(Build.BuildId)
-                    appServiceName: "$(APP_SERVICE_NAME)-staging"
+                    appServiceName: "$(APP_NAME)-staging-backend"
                     resourceGroup: $(RESOURCE_GROUP)
                     sqlConnectionString: $(SQL-ConnectionString)
                     environment: "staging"
@@ -254,7 +252,7 @@ stages:
                     acrLoginServer: $(ACR_LOGIN_SERVER)
                     imageName: $(FRONTEND_IMAGE_NAME)
                     imageTag: $(Build.BuildId)
-                    appServiceName: "$(FRONTEND_APP_NAME)-staging"
+                    appServiceName: "$(APP_NAME)-staging-swa"
                     resourceGroup: $(RESOURCE_GROUP)
                     environment: "staging"
 
@@ -278,7 +276,7 @@ stages:
                     acrLoginServer: $(ACR_LOGIN_SERVER)
                     imageName: $(BACKEND_IMAGE_NAME)
                     imageTag: $(Build.BuildId)
-                    appServiceName: $(APP_SERVICE_NAME)
+                    appServiceName: "$(APP_NAME)-production-backend"
                     resourceGroup: $(RESOURCE_GROUP)
                     sqlConnectionString: $(SQL-ConnectionString)
                     environment: "production"
@@ -296,7 +294,7 @@ stages:
                     acrLoginServer: $(ACR_LOGIN_SERVER)
                     imageName: $(FRONTEND_IMAGE_NAME)
                     imageTag: $(Build.BuildId)
-                    appServiceName: $(FRONTEND_APP_NAME)
+                    appServiceName: "$(APP_NAME)-production-swa"
                     resourceGroup: $(RESOURCE_GROUP)
                     environment: "production"
 
