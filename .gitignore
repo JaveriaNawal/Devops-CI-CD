@@ -1,0 +1,61 @@
+# ============================================================
+#  .gitignore — Full-stack Node.js / React / Azure project
+# ============================================================
+
+# ── Node.js ──────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# ── Build outputs ─────────────────────────────────────────────
+dist/
+build/
+out/
+
+# ── TypeScript ────────────────────────────────────────────────
+*.tsbuildinfo
+
+# ── Environment / Secrets ─────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+*.pem
+*.key
+*.pfx
+*.p12
+
+# ── Test artifacts ────────────────────────────────────────────
+coverage/
+test-results/
+playwright-results/
+.nyc_output/
+
+# ── Docker ────────────────────────────────────────────────────
+.docker/
+
+# ── Azure ─────────────────────────────────────────────────────
+.azure/
+!.azure/templates/
+*.publishsettings
+*.azurePubxml
+
+# ── Editor / OS ───────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Bicep compiled output ─────────────────────────────────────
+infrastructure/*.json

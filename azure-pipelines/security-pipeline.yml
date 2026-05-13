@@ -1,0 +1,163 @@
+# ── azure-pipelines/security-pipeline.yml ────────────────────
+# Security pipeline combining:
+#   EM-B: SonarQube SAST
+#   EM-C: Snyk SCA
+#   EM-D: OWASP ZAP DAST
+#
+# Trigger: on every PR and push to main/develop
+# BuildAndDeploy only runs if all security stages pass
+# ──────────────────────────────────────────────────────────────
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - group: taskapp-variables
+
+stages:
+# ═══════════════════════════════════════════════════════════════
+# EM-B — SonarQube SAST
+# ═══════════════════════════════════════════════════════════════
+- stage: SAST
+  displayName: 'EM-B: SonarQube SAST'
+  jobs:
+  - job: SonarQubeScan
+    displayName: 'SonarQube Static Analysis'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+      fetchDepth: 0    # full history needed for SonarQube blame data
+
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+      displayName: 'Install Node.js'
+
+    - script: |
+        cd backend && npm ci
+        cd ../frontend && npm ci
+      displayName: 'Install dependencies'
+
+    - task: SonarQubePrepare@5
+      displayName: 'Prepare SonarQube analysis'
+      inputs:
+        SonarQube: sonarqube-connection
+        scannerMode: CLI
+        configMode: manual
+        cliProjectKey: taskapp-cicd
+        cliProjectName: 'TaskApp CI/CD'
+        extraProperties: |
+          sonar.sources=backend/src,frontend/src
+          sonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/*.test.*,**/*.spec.*
+          sonar.javascript.lcov.reportPaths=backend/coverage/lcov.info,frontend/coverage/lcov.info
+
+    - task: SonarQubeAnalyze@5
+      displayName: 'Run SonarQube analysis'
+
+    - task: SonarQubePublish@5
+      displayName: 'Publish SonarQube results'
+      inputs:
+        pollingTimeoutSec: '300'
+
+# ═══════════════════════════════════════════════════════════════
+# EM-C — Snyk SCA (depends on SAST passing)
+# ═══════════════════════════════════════════════════════════════
+- stage: SCA
+  displayName: 'EM-C: Snyk SCA'
+  dependsOn: SAST
+  condition: succeeded()
+  jobs:
+  - job: SnykScan
+    displayName: 'Snyk Dependency Scan'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+      displayName: 'Install Node.js'
+
+    - script: |
+        cd backend && npm ci
+        cd ../frontend && npm ci
+      displayName: 'Install dependencies'
+
+    - task: SnykSecurityScan@1
+      displayName: 'Snyk scan — backend/package.json'
+      inputs:
+        serviceConnectionEndpoint: snyk-connection
+        testType: app
+        targetFile: backend/package.json
+        severityThreshold: high
+        failOnIssues: true
+        monitorWhen: always
+        additionalArguments: '--all-projects'
+
+    - task: SnykSecurityScan@1
+      displayName: 'Snyk scan — frontend/package.json'
+      inputs:
+        serviceConnectionEndpoint: snyk-connection
+        testType: app
+        targetFile: frontend/package.json
+        severityThreshold: high
+        failOnIssues: true
+        monitorWhen: always
+        additionalArguments: '--all-projects'
+
+# ═══════════════════════════════════════════════════════════════
+# EM-D — OWASP ZAP DAST (depends on SCA + app deployed)
+# ═══════════════════════════════════════════════════════════════
+- stage: DAST
+  displayName: 'EM-D: OWASP ZAP DAST'
+  dependsOn: SCA
+  condition: succeeded()
+  jobs:
+  - job: ZAPScan
+    displayName: 'OWASP ZAP Dynamic Analysis'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    # ── ZAP Baseline Scan (passive) against Static Web App ──
+    - script: |
+        docker pull zaproxy/zap-stable
+        docker run --rm \
+          -v $(Build.ArtifactStagingDirectory):/zap/wrk \
+          zaproxy/zap-stable \
+          zap-baseline.py \
+            -t $(STATIC_WEB_APP_URL) \
+            -r zap-report.html \
+            -I
+        echo "ZAP baseline scan complete"
+      displayName: 'ZAP Baseline Scan (passive) — frontend'
+      continueOnError: true
+
+    # ── ZAP API Scan against backend OpenAPI spec ────────────
+    - script: |
+        docker run --rm \
+          -v $(Build.ArtifactStagingDirectory):/zap/wrk \
+          zaproxy/zap-stable \
+          zap-api-scan.py \
+            -t $(BACKEND_URL)/api/openapi.json \
+            -f openapi \
+            -r zap-api-report.html \
+            -I
+        echo "ZAP API scan complete"
+      displayName: 'ZAP API Scan — backend /api/openapi.json'
+      continueOnError: true
+
+    # ── Publish both reports as pipeline artifact ────────────
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish ZAP security reports'
+      condition: always()    # save reports even if scans found issues
+      inputs:
+        PathtoPublish: $(Build.ArtifactStagingDirectory)
+        ArtifactName: zap-security-reports
+        publishLocation: Container

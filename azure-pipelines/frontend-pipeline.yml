@@ -1,0 +1,114 @@
+# ── azure-pipelines/frontend-pipeline.yml ────────────────────
+# CI/CD pipeline for the React frontend
+# Stages: Build → DeployDev (develop branch) → DeployProd (main branch)
+# ──────────────────────────────────────────────────────────────
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - frontend/**
+
+variables:
+  - group: taskapp-variables
+  - name: imageTag
+    value: $(Build.BuildId)
+
+stages:
+# ═══════════════════════════════════════════════════════════════
+# STAGE 1 — Build React app & Push Docker image to ACR
+# ═══════════════════════════════════════════════════════════════
+- stage: Build
+  displayName: 'Build & Push Frontend Image'
+  jobs:
+  - job: DockerBuildPush
+    displayName: 'Docker Build & Push'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: Docker@2
+      displayName: 'Login to ACR'
+      inputs:
+        command: login
+        containerRegistry: acr-service-connection
+
+    - task: Docker@2
+      displayName: 'Build frontend image (with VITE_API_BASE_URL)'
+      inputs:
+        command: build
+        repository: $(FRONTEND_IMAGE_NAME)
+        dockerfile: frontend/Dockerfile
+        buildContext: frontend/
+        arguments: '--build-arg VITE_API_BASE_URL=$(VITE_API_BASE_URL)'
+        tags: |
+          $(imageTag)
+          latest
+
+    - task: Docker@2
+      displayName: 'Push frontend image to ACR'
+      inputs:
+        command: push
+        repository: $(FRONTEND_IMAGE_NAME)
+        containerRegistry: acr-service-connection
+        tags: |
+          $(imageTag)
+          latest
+
+# ═══════════════════════════════════════════════════════════════
+# STAGE 2 — Deploy to Dev via Azure Static Web Apps (develop)
+# ═══════════════════════════════════════════════════════════════
+- stage: DeployDev
+  displayName: 'Deploy Frontend to Dev (Static Web App)'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  jobs:
+  - deployment: DeployFrontendDev
+    displayName: 'Deploy to Static Web App (dev)'
+    pool:
+      vmImage: ubuntu-latest
+    environment: development
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: AzureStaticWebApp@0
+            displayName: 'Deploy to Azure Static Web App (dev)'
+            inputs:
+              azure_static_web_apps_api_token: $(SWA_DEPLOYMENT_TOKEN_DEV)
+              app_location: /frontend
+              output_location: dist
+              app_build_command: 'VITE_API_BASE_URL=$(VITE_API_BASE_URL_DEV) npm run build'
+
+# ═══════════════════════════════════════════════════════════════
+# STAGE 3 — Deploy to Production (main branch + manual approval)
+# ═══════════════════════════════════════════════════════════════
+- stage: DeployProd
+  displayName: 'Deploy Frontend to Production (Static Web App)'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployFrontendProd
+    displayName: 'Deploy to Static Web App (prod)'
+    pool:
+      vmImage: ubuntu-latest
+    environment: production     # ← approval gate configured here in Azure DevOps
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: AzureStaticWebApp@0
+            displayName: 'Deploy to Azure Static Web App (prod)'
+            inputs:
+              azure_static_web_apps_api_token: $(SWA_DEPLOYMENT_TOKEN)
+              app_location: /frontend
+              output_location: dist
+              app_build_command: 'VITE_API_BASE_URL=$(VITE_API_BASE_URL_PROD) npm run build'

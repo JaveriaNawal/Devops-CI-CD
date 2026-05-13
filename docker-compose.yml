@@ -1,0 +1,75 @@
+version: "3.9"
+
+# ── Local development stack ───────────────────────────────────
+# Usage:
+#   docker compose up -d        ← start SQL Server in background
+#   docker compose down         ← stop and remove containers
+#   docker compose logs -f      ← tail logs
+
+services:
+  # ── Microsoft SQL Server 2022 ──────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver-local
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "DevLocal@1234"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost",
+             "-U", "sa", "-P", "DevLocal@1234", "-No", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── Backend (Express API) ──────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      target: builder          # dev stage with ts-node-dev
+    container_name: backend-local
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      SQL_SERVER: sqlserver
+      SQL_DATABASE: appdb
+      SQL_USER: sa
+      SQL_PASSWORD: DevLocal@1234
+      SQL_PORT: 1433
+      SQL_TRUST_CERT: "true"
+      JWT_SECRET: local-dev-secret-change-in-production-32chars
+      ALLOWED_ORIGINS: http://localhost:5173
+      LOG_LEVEL: debug
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend/src:/app/src   # hot-reload source
+    command: ["npm", "run", "dev"]
+
+  # ── Frontend (Vite dev server) ─────────────────────────────
+  frontend:
+    image: node:20-alpine
+    container_name: frontend-local
+    working_dir: /app
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: ""      # uses Vite proxy → backend:8080
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+volumes:
+  sqlserver_data:
+    driver: local

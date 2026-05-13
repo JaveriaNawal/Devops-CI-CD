@@ -1,0 +1,145 @@
+# ── azure-pipelines/backend-pipeline.yml ─────────────────────
+# CI/CD pipeline for the Express.js backend
+# Stages: Build → DeployDev (develop branch) → DeployProd (main branch)
+# ──────────────────────────────────────────────────────────────
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - group: taskapp-variables
+  - name: imageTag
+    value: $(Build.BuildId)
+
+stages:
+# ═══════════════════════════════════════════════════════════════
+# STAGE 1 — Build & Push Docker image to ACR
+# ═══════════════════════════════════════════════════════════════
+- stage: Build
+  displayName: 'Build & Push Backend Image'
+  jobs:
+  - job: DockerBuildPush
+    displayName: 'Docker Build & Push'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: Docker@2
+      displayName: 'Login to ACR'
+      inputs:
+        command: login
+        containerRegistry: acr-service-connection
+
+    - task: Docker@2
+      displayName: 'Build backend image'
+      inputs:
+        command: build
+        repository: $(BACKEND_IMAGE_NAME)
+        dockerfile: backend/Dockerfile
+        buildContext: backend/
+        tags: |
+          $(imageTag)
+          latest
+
+    - task: Docker@2
+      displayName: 'Push backend image to ACR'
+      inputs:
+        command: push
+        repository: $(BACKEND_IMAGE_NAME)
+        containerRegistry: acr-service-connection
+        tags: |
+          $(imageTag)
+          latest
+
+    - script: |
+        echo "##vso[task.setvariable variable=imageTag;isOutput=true]$(imageTag)"
+      name: setTag
+      displayName: 'Export image tag'
+
+# ═══════════════════════════════════════════════════════════════
+# STAGE 2 — Deploy to Dev (develop branch only)
+# ═══════════════════════════════════════════════════════════════
+- stage: DeployDev
+  displayName: 'Deploy to Dev (App Service)'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  jobs:
+  - deployment: DeployBackendDev
+    displayName: 'Deploy Backend to Dev'
+    pool:
+      vmImage: ubuntu-latest
+    environment: development
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: 'Deploy to App Service (dev)'
+            inputs:
+              azureSubscription: azure-service-connection
+              appName: $(BACKEND_APP_NAME)-dev
+              containers: $(DOCKER_REGISTRY)/$(BACKEND_IMAGE_NAME):$(Build.BuildId)
+
+          - task: AzureAppServiceManage@0
+            displayName: 'Restart App Service (dev)'
+            inputs:
+              azureSubscription: azure-service-connection
+              Action: Restart Azure App Service
+              WebAppName: $(BACKEND_APP_NAME)-dev
+
+          - script: |
+              sleep 20
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                "https://$(BACKEND_APP_NAME)-dev.azurewebsites.net/api/health")
+              echo "Health check status: $HTTP_STATUS"
+              if [ "$HTTP_STATUS" != "200" ]; then
+                echo "##vso[task.logissue type=error]Health check FAILED — got $HTTP_STATUS"
+                exit 1
+              fi
+            displayName: 'Smoke test — /api/health'
+
+# ═══════════════════════════════════════════════════════════════
+# STAGE 3 — Deploy to Production (main branch + manual approval)
+# ═══════════════════════════════════════════════════════════════
+- stage: DeployProd
+  displayName: 'Deploy to Production (App Service)'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployBackendProd
+    displayName: 'Deploy Backend to Production'
+    pool:
+      vmImage: ubuntu-latest
+    environment: production     # ← approval gate configured here in Azure DevOps
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebAppContainer@1
+            displayName: 'Deploy to App Service (prod)'
+            inputs:
+              azureSubscription: azure-service-connection
+              appName: $(BACKEND_APP_NAME)
+              containers: $(DOCKER_REGISTRY)/$(BACKEND_IMAGE_NAME):$(Build.BuildId)
+
+          - task: AzureAppServiceManage@0
+            displayName: 'Restart App Service (prod)'
+            inputs:
+              azureSubscription: azure-service-connection
+              Action: Restart Azure App Service
+              WebAppName: $(BACKEND_APP_NAME)
+
+          - script: |
+              sleep 30
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                "https://$(BACKEND_APP_NAME).azurewebsites.net/api/health")
+              echo "Health check status: $HTTP_STATUS"
+              if [ "$HTTP_STATUS" != "200" ]; then
+                echo "##vso[task.logissue type=error]Health check FAILED — got $HTTP_STATUS"
+                exit 1
+              fi
+            displayName: 'Smoke test — /api/health'

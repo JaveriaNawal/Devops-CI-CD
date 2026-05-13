@@ -1,0 +1,327 @@
+# ============================================================
+#  azure-pipelines.yml  —  Root orchestrator pipeline
+#  Triggers backend + frontend child pipelines in sequence
+#  and handles cross-stage notifications.
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+      - release/*
+  paths:
+    exclude:
+      - docs/**
+      - "*.md"
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+# ── Global variables (non-secret) ───────────────────────────
+variables:
+  # Overridable at queue time
+  - name: BUILD_CONFIGURATION
+    value: "production"
+  - name: NODE_VERSION
+    value: "20.x"
+  - name: DOCKER_BUILDKIT
+    value: "1"
+  # ACR details (non-secret)
+  - name: ACR_NAME
+    value: "acrtaskappjaveria"
+  - name: ACR_LOGIN_SERVER
+    value: "acrtaskappjaveria.azurecr.io"
+  - name: BACKEND_IMAGE_NAME
+    value: "taskapp-backend"
+  - name: FRONTEND_IMAGE_NAME
+    value: "taskapp-frontend"
+  # Azure targets
+  - name: RESOURCE_GROUP
+    value: "rg-taskapp-javeria-eus-01"
+  - name: APP_SERVICE_NAME
+    value: "app-taskapp-backend-javeria-eus-01"
+  - name: STATIC_WEB_APP_NAME
+    value: "stapp-taskapp-frontend-javeria-eus-01"
+  - name: AZURE_LOCATION
+    value: "eastus"
+  # Cache keys
+  - name: BACKEND_CACHE_KEY
+    value: 'npm-backend | "$(Agent.OS)" | backend/package-lock.json'
+  - name: FRONTEND_CACHE_KEY
+    value: 'npm-frontend | "$(Agent.OS)" | frontend/package-lock.json'
+
+# ── Secrets from Azure Key Vault (linked variable group) ─────
+# Create these variable groups in Azure DevOps:
+#   Library → Variable groups → Link secrets from Key Vault
+  - group: "keyvault-secrets"        # maps: ACR-Password, SQL-ConnectionString,
+                                      #        NotificationEmail, SWA-DeploymentToken
+  - group: "pipeline-env-vars"       # maps: AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID
+
+# ── Agent pool ───────────────────────────────────────────────
+pool:
+  vmImage: "ubuntu-latest"
+
+# ============================================================
+#  STAGES
+# ============================================================
+stages:
+
+# ────────────────────────────────────────────────────────────
+# STAGE 1 — Validate (lint + unit tests on both apps)
+# ────────────────────────────────────────────────────────────
+  - stage: Validate
+    displayName: "🔍 Validate — Lint & Unit Tests"
+    jobs:
+      - job: BackendValidate
+        displayName: "Backend — Lint & Test"
+        steps:
+          - template: .azure/templates/steps-node-setup.yml
+            parameters:
+              workingDirectory: "backend"
+              cacheKey: $(BACKEND_CACHE_KEY)
+              cachePath: "backend/node_modules"
+
+          - script: npm run lint
+            workingDirectory: backend
+            displayName: "ESLint — Backend"
+
+          - script: npm run test:ci
+            workingDirectory: backend
+            displayName: "Jest — Backend unit tests"
+            env:
+              NODE_ENV: test
+              SQL_CONNECTION_STRING: "Server=localhost;Database=testdb;Trusted_Connection=true"
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: "JUnit"
+              testResultsFiles: "backend/test-results/junit.xml"
+              mergeTestResults: true
+              testRunTitle: "Backend Unit Tests"
+
+          - task: PublishCodeCoverageResults@1
+            inputs:
+              codeCoverageTool: "Cobertura"
+              summaryFileLocation: "backend/coverage/cobertura-coverage.xml"
+
+      - job: FrontendValidate
+        displayName: "Frontend — Lint & Test"
+        steps:
+          - template: .azure/templates/steps-node-setup.yml
+            parameters:
+              workingDirectory: "frontend"
+              cacheKey: $(FRONTEND_CACHE_KEY)
+              cachePath: "frontend/node_modules"
+
+          - script: npm run lint
+            workingDirectory: frontend
+            displayName: "ESLint — Frontend"
+
+          - script: npm run test:ci
+            workingDirectory: frontend
+            displayName: "Vitest — Frontend unit tests"
+            env:
+              CI: true
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: "JUnit"
+              testResultsFiles: "frontend/test-results/junit.xml"
+              mergeTestResults: true
+              testRunTitle: "Frontend Unit Tests"
+
+# ────────────────────────────────────────────────────────────
+# STAGE 2 — Build
+# ────────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: "🔨 Build"
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: BuildBackend
+        displayName: "Build — Backend Docker Image"
+        steps:
+          - template: .azure/templates/steps-node-setup.yml
+            parameters:
+              workingDirectory: "backend"
+              cacheKey: $(BACKEND_CACHE_KEY)
+              cachePath: "backend/node_modules"
+
+          - script: npm run build
+            workingDirectory: backend
+            displayName: "Compile TypeScript"
+
+          - template: .azure/templates/steps-docker-build-push.yml
+            parameters:
+              imageName: $(ACR_LOGIN_SERVER)/$(BACKEND_IMAGE_NAME)
+              imageTag: $(Build.BuildId)
+              dockerfilePath: "backend/Dockerfile"
+              buildContext: "backend"
+              acrName: $(ACR_NAME)
+              acrLoginServer: $(ACR_LOGIN_SERVER)
+              acrPassword: $(ACR-Password)    # from Key Vault
+
+      - job: BuildFrontend
+        displayName: "Build — Frontend Static Assets"
+        steps:
+          - template: .azure/templates/steps-node-setup.yml
+            parameters:
+              workingDirectory: "frontend"
+              cacheKey: $(FRONTEND_CACHE_KEY)
+              cachePath: "frontend/node_modules"
+
+          - script: npm run build
+            workingDirectory: frontend
+            displayName: "Vite production build"
+            env:
+              VITE_API_BASE_URL: "https://$(APP_SERVICE_NAME).azurewebsites.net/api"
+              NODE_ENV: production
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: "frontend/dist"
+              artifact: "frontend-dist"
+              publishLocation: "pipeline"
+
+# ────────────────────────────────────────────────────────────
+# STAGE 3 — Integration / E2E Tests
+# ────────────────────────────────────────────────────────────
+  - stage: IntegrationTest
+    displayName: "🧪 Integration & E2E Tests"
+    dependsOn: Build
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: E2ETests
+        displayName: "Playwright E2E Tests"
+        steps:
+          - template: .azure/templates/steps-node-setup.yml
+            parameters:
+              workingDirectory: "frontend"
+              cacheKey: $(FRONTEND_CACHE_KEY)
+              cachePath: "frontend/node_modules"
+
+          - script: npx playwright install --with-deps chromium
+            workingDirectory: frontend
+            displayName: "Install Playwright browsers"
+
+          - script: npm run test:e2e
+            workingDirectory: frontend
+            displayName: "Run Playwright E2E suite"
+            env:
+              PLAYWRIGHT_BASE_URL: "http://localhost:3000"
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: "JUnit"
+              testResultsFiles: "frontend/playwright-results/results.xml"
+              testRunTitle: "E2E Tests"
+
+# ────────────────────────────────────────────────────────────
+# STAGE 4 — Deploy to Staging
+# ────────────────────────────────────────────────────────────
+  - stage: DeployStaging
+    displayName: "🚀 Deploy — Staging"
+    dependsOn: IntegrationTest
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    variables:
+      ENVIRONMENT_NAME: "staging"
+    jobs:
+      - deployment: DeployBackendStaging
+        displayName: "Deploy Backend → App Service (staging slot)"
+        environment: "staging"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: .azure/templates/steps-deploy-backend.yml
+                  parameters:
+                    acrLoginServer: $(ACR_LOGIN_SERVER)
+                    imageName: $(BACKEND_IMAGE_NAME)
+                    imageTag: $(Build.BuildId)
+                    appServiceName: "$(APP_SERVICE_NAME)-staging"
+                    resourceGroup: $(RESOURCE_GROUP)
+                    sqlConnectionString: $(SQL-ConnectionString)
+                    environment: "staging"
+
+      - deployment: DeployFrontendStaging
+        displayName: "Deploy Frontend → Static Web App (staging)"
+        environment: "staging"
+        dependsOn: []
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: .azure/templates/steps-deploy-frontend.yml
+                  parameters:
+                    swaName: $(STATIC_WEB_APP_NAME)
+                    deploymentToken: $(SWA-DeploymentToken)
+                    artifactName: "frontend-dist"
+                    environment: "staging"
+
+# ────────────────────────────────────────────────────────────
+# STAGE 5 — Deploy to Production (manual gate on main)
+# ────────────────────────────────────────────────────────────
+  - stage: DeployProduction
+    displayName: "🏁 Deploy — Production"
+    dependsOn: DeployStaging
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployBackendProd
+        displayName: "Deploy Backend → App Service (production)"
+        environment: "production"      # ← add approval gate in Azure DevOps UI
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: .azure/templates/steps-deploy-backend.yml
+                  parameters:
+                    acrLoginServer: $(ACR_LOGIN_SERVER)
+                    imageName: $(BACKEND_IMAGE_NAME)
+                    imageTag: $(Build.BuildId)
+                    appServiceName: $(APP_SERVICE_NAME)
+                    resourceGroup: $(RESOURCE_GROUP)
+                    sqlConnectionString: $(SQL-ConnectionString)
+                    environment: "production"
+
+      - deployment: DeployFrontendProd
+        displayName: "Deploy Frontend → Static Web App (production)"
+        environment: "production"
+        dependsOn: []
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: .azure/templates/steps-deploy-frontend.yml
+                  parameters:
+                    swaName: $(STATIC_WEB_APP_NAME)
+                    deploymentToken: $(SWA-DeploymentToken)
+                    artifactName: "frontend-dist"
+                    environment: "production"
+
+# ────────────────────────────────────────────────────────────
+# STAGE 6 — Notify (always runs)
+# ────────────────────────────────────────────────────────────
+  - stage: Notify
+    displayName: "📣 Notify"
+    dependsOn:
+      - DeployProduction
+      - DeployStaging
+    condition: always()
+    jobs:
+      - job: SendNotification
+        displayName: "Send pipeline result notification"
+        steps:
+          - template: .azure/templates/steps-notify.yml
+            parameters:
+              notificationEmail: $(NotificationEmail)
+              pipelineStatus: $[ stageDependencies.DeployProduction.DeployBackendProd.result ]
+              buildId: $(Build.BuildId)
+              repositoryName: $(Build.Repository.Name)
+              branchName: $(Build.SourceBranchName)
