@@ -7,6 +7,6 @@ export const apiRouter = Router();
 apiRouter.use("/tasks", tasksRouter);
 
 // Example protected resource route
-apiRouter.get("/items", async (_req: Request, res: Response) => {
+apiRouter.get("/items", (_req: Request, res: Response) => {
   res.json({ items: [], message: "API operational" });
 });

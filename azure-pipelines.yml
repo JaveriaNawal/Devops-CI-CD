@@ -168,26 +168,17 @@ stages:
               acrPassword: $(ACR-Password)    # from Key Vault
 
       - job: BuildFrontend
-        displayName: "Build — Frontend Static Assets"
+        displayName: "Build — Frontend Docker Image"
         steps:
-          - template: .azure/templates/steps-node-setup.yml
+          - template: .azure/templates/steps-docker-build-push.yml
             parameters:
-              workingDirectory: "frontend"
-              cacheKey: $(FRONTEND_CACHE_KEY)
-              cachePath: "frontend/node_modules"
-
-          - script: npm run build
-            workingDirectory: frontend
-            displayName: "Vite production build"
-            env:
-              VITE_API_BASE_URL: "https://$(APP_SERVICE_NAME).azurewebsites.net/api"
-              NODE_ENV: production
-
-          - task: PublishPipelineArtifact@1
-            inputs:
-              targetPath: "frontend/dist"
-              artifact: "frontend-dist"
-              publishLocation: "pipeline"
+              imageName: $(ACR_LOGIN_SERVER)/$(FRONTEND_IMAGE_NAME)
+              imageTag: $(Build.BuildId)
+              dockerfilePath: "frontend/Dockerfile"
+              buildContext: "frontend"
+              acrName: $(ACR_NAME)
+              acrLoginServer: $(ACR_LOGIN_SERVER)
+              acrPassword: $(ACR-Password)
 
 # ────────────────────────────────────────────────────────────
 # STAGE 3 — Integration / E2E Tests
@@ -251,18 +242,20 @@ stages:
                     environment: "staging"
 
       - deployment: DeployFrontendStaging
-        displayName: "Deploy Frontend → Static Web App (staging)"
+        displayName: "Deploy Frontend → App Service (staging)"
         environment: "staging"
         dependsOn: []
         strategy:
           runOnce:
             deploy:
               steps:
-                - template: .azure/templates/steps-deploy-frontend.yml
+                - template: .azure/templates/steps-deploy-backend.yml
                   parameters:
-                    swaName: $(STATIC_WEB_APP_NAME)
-                    deploymentToken: $(SWA-DeploymentToken)
-                    artifactName: "frontend-dist"
+                    acrLoginServer: $(ACR_LOGIN_SERVER)
+                    imageName: $(FRONTEND_IMAGE_NAME)
+                    imageTag: $(Build.BuildId)
+                    appServiceName: "$(FRONTEND_APP_NAME)-staging"
+                    resourceGroup: $(RESOURCE_GROUP)
                     environment: "staging"
 
 # ────────────────────────────────────────────────────────────
@@ -291,18 +284,20 @@ stages:
                     environment: "production"
 
       - deployment: DeployFrontendProd
-        displayName: "Deploy Frontend → Static Web App (production)"
+        displayName: "Deploy Frontend → App Service (production)"
         environment: "production"
         dependsOn: []
         strategy:
           runOnce:
             deploy:
               steps:
-                - template: .azure/templates/steps-deploy-frontend.yml
+                - template: .azure/templates/steps-deploy-backend.yml
                   parameters:
-                    swaName: $(STATIC_WEB_APP_NAME)
-                    deploymentToken: $(SWA-DeploymentToken)
-                    artifactName: "frontend-dist"
+                    acrLoginServer: $(ACR_LOGIN_SERVER)
+                    imageName: $(FRONTEND_IMAGE_NAME)
+                    imageTag: $(Build.BuildId)
+                    appServiceName: $(FRONTEND_APP_NAME)
+                    resourceGroup: $(RESOURCE_GROUP)
                     environment: "production"
 
 # ────────────────────────────────────────────────────────────

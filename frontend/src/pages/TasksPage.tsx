@@ -6,7 +6,7 @@ import styles from "./TasksPage.module.css";
 
 export function TasksPage(): JSX.Element {
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore((s) => s);
+  const { logout } = useAuthStore((s) => s);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -49,8 +49,8 @@ export function TasksPage(): JSX.Element {
     try {
       await tasksApi.delete(id);
       setTasks(tasks.filter(t => t.id !== id));
-    } catch (err) {
-      console.error("Delete failed", err);
+    } catch (err: unknown) {
+      console.error("Delete failed", (err as any).message);
     }
   };
 

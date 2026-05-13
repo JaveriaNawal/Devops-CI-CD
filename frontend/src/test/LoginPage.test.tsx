@@ -21,7 +21,7 @@ vi.mock("../lib/api", () => ({
 // ── Mock Zustand store ────────────────────────────────────────
 const mockSetAuth = vi.fn();
 vi.mock("../store/authStore", () => ({
-  useAuthStore: (selector: any) =>
+  useAuthStore: (selector: (s: any) => any) =>
     selector({ token: null, user: null, setAuth: mockSetAuth, logout: vi.fn() }),
 }));
 

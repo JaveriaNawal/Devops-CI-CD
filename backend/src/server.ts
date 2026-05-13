@@ -34,13 +34,19 @@ async function bootstrap(): Promise<void> {
   });
 
   // ── Graceful shutdown ──────────────────────────────────
-  const shutdown = async (signal: string): Promise<void> => {
+  const shutdown = (signal: string): void => {
     logger.info(`${signal} received — shutting down gracefully...`);
 
-    server.close(async () => {
-      await closeDatabaseConnection();
-      logger.info("💤 Server closed. Goodbye.");
-      process.exit(0);
+    server.close(() => {
+      closeDatabaseConnection()
+        .then(() => {
+          logger.info("💤 Server closed. Goodbye.");
+          process.exit(0);
+        })
+        .catch((err) => {
+          logger.error(`Error during DB closure: ${err}`);
+          process.exit(1);
+        });
     });
 
     // Force shutdown after 10 seconds
@@ -50,8 +56,11 @@ async function bootstrap(): Promise<void> {
     }, 10_000);
   };
 
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => { shutdown("SIGTERM"); });
+  process.on("SIGINT", () => { shutdown("SIGINT"); });
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  logger.error(`Fatal bootstrap error: ${err}`);
+  process.exit(1);
+});

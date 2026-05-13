@@ -12,4 +12,4 @@ param location               = 'southeastasia'
 param appName                = 'taskapp'
 param sqlAdminLogin          = 'sqladmin'
 param sqlAdminPassword       = ''           // injected at deploy time
-param keyVaultAdminObjectId  = 'YOUR-AAD-OBJECT-ID'   // ← replace
+param keyVaultAdminObjectId  = '9131282d-a5d6-4de0-9457-9b86c1b14c4f'
