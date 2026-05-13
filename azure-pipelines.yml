@@ -46,6 +46,8 @@ variables:
     value: "taskapp"
   - name: AZURE_LOCATION
     value: "southeastasia"
+  - name: KEY_VAULT_NAME
+    value: "taskapp-staging-kv"
   # Cache keys
   - name: BACKEND_CACHE_KEY
     value: 'npm-backend | "$(Agent.OS)" | backend/package-lock.json'
@@ -236,8 +238,8 @@ stages:
                     imageTag: $(Build.BuildId)
                     appServiceName: "$(APP_NAME)-staging-backend"
                     resourceGroup: $(RESOURCE_GROUP)
-                    sqlConnectionString: $(SQL-ConnectionString)
                     environment: "staging"
+                    keyVaultName: $(KEY_VAULT_NAME)
 
       - deployment: DeployFrontendStaging
         displayName: "Deploy Frontend → App Service (staging)"
@@ -247,7 +249,7 @@ stages:
           runOnce:
             deploy:
               steps:
-                - template: .azure/templates/steps-deploy-backend.yml
+                - template: .azure/templates/steps-deploy-frontend-appservice.yml
                   parameters:
                     acrLoginServer: $(ACR_LOGIN_SERVER)
                     imageName: $(FRONTEND_IMAGE_NAME)
@@ -255,6 +257,7 @@ stages:
                     appServiceName: "$(APP_NAME)-staging-swa"
                     resourceGroup: $(RESOURCE_GROUP)
                     environment: "staging"
+                    keyVaultName: $(KEY_VAULT_NAME)
 
 # ────────────────────────────────────────────────────────────
 # STAGE 5 — Deploy to Production (manual gate on main)
