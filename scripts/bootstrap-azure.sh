@@ -70,11 +70,11 @@ SP_OUTPUT=$(az ad sp create-for-rbac \
   --name    "$SERVICE_PRINCIPAL_NAME" \
   --role    "Contributor" \
   --scopes  "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP" \
-  --output  json)
+  --query   "[appId, password, tenant]" \
+  --output  tsv)
 
-SP_CLIENT_ID=$(echo "$SP_OUTPUT"     | jq -r '.appId')
-SP_CLIENT_SECRET=$(echo "$SP_OUTPUT" | jq -r '.password')
-SP_TENANT_ID=$(echo "$SP_OUTPUT"     | jq -r '.tenant')
+# Read tab-separated values into variables
+read -r SP_CLIENT_ID SP_CLIENT_SECRET SP_TENANT_ID <<< "$SP_OUTPUT"
 
 # ── 4. Deploy Bicep infrastructure ───────────────────────────
 echo "▶ Deploying Bicep infrastructure..."
@@ -87,12 +87,11 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --template-file   "infrastructure/main.bicep" \
   --parameters      "infrastructure/parameters.${ENVIRONMENT}.bicepparam" \
   --parameters      sqlAdminPassword="$SQL_PASSWORD" \
-  --output          json)
+  --query           "properties.outputs.{acr:acrLoginServer.value, backend:backendUrl.value, frontend:frontendUrl.value, kv:keyVaultName.value}" \
+  --output          tsv)
 
-ACR_LOGIN_SERVER=$(echo "$DEPLOY_OUTPUT" | jq -r '.properties.outputs.acrLoginServer.value')
-BACKEND_URL=$(echo "$DEPLOY_OUTPUT"      | jq -r '.properties.outputs.backendUrl.value')
-FRONTEND_URL=$(echo "$DEPLOY_OUTPUT"     | jq -r '.properties.outputs.frontendUrl.value')
-KV_NAME=$(echo "$DEPLOY_OUTPUT"          | jq -r '.properties.outputs.keyVaultName.value')
+# Read values into variables
+read -r ACR_LOGIN_SERVER BACKEND_URL FRONTEND_URL KV_NAME <<< "$DEPLOY_OUTPUT"
 
 # ── 5. Grant SP access to Key Vault ──────────────────────────
 echo "▶ Granting service principal Key Vault Secrets User role..."

@@ -8,8 +8,11 @@
 @allowed(['staging', 'production'])
 param environment string = 'staging'
 
-@description('Azure region for all resources')
+@description('Azure region for most resources')
 param location string = resourceGroup().location
+
+@description('Azure region for Static Web App (different due to availability)')
+param swaLocation string = 'centralus'
 
 @description('Globally unique base name (e.g. myapp)')
 @minLength(3)
@@ -260,21 +263,37 @@ resource stagingSlot 'Microsoft.Web/sites/slots@2022-09-01' = if (environment ==
 }
 
 // ============================================================
-//  Azure Static Web App (Frontend)
+//  App Service (Frontend App)
 // ============================================================
-resource staticWebApp 'Microsoft.Web/staticSites@2022-09-01' = {
+resource frontendApp 'Microsoft.Web/sites@2022-09-01' = {
   name:     frontendName
   location: location
   tags:     commonTags
-  sku: {
-    name: environment == 'production' ? 'Standard' : 'Free'
-    tier: environment == 'production' ? 'Standard' : 'Free'
-  }
+  identity: { type: 'SystemAssigned' }
   properties: {
-    buildProperties: {
-      appLocation:    '/'
-      outputLocation: 'dist'
+    serverFarmId:        appServicePlan.id
+    httpsOnly:           true
+    siteConfig: {
+      linuxFxVersion:      'DOCKER|${acr.properties.loginServer}/frontend-app:latest'
+      alwaysOn:            true
+      appSettings: [
+        { name: 'DOCKER_REGISTRY_SERVER_URL',      value: 'https://${acr.properties.loginServer}' }
+        { name: 'DOCKER_REGISTRY_SERVER_USERNAME', value: acr.listCredentials().username }
+        { name: 'DOCKER_REGISTRY_SERVER_PASSWORD', value: '@Microsoft.KeyVault(SecretUri=${secretAcrPassword.properties.secretUri})' }
+        { name: 'VITE_API_BASE_URL',               value: 'https://${backendApp.properties.defaultHostName}' }
+      ]
     }
+  }
+}
+
+// Grant frontend App Service access to Key Vault
+resource frontendKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name:  guid(keyVault.id, frontendApp.id, 'Key Vault Secrets User')
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId:      frontendApp.identity.principalId
+    principalType:    'ServicePrincipal'
   }
 }
 
@@ -283,8 +302,9 @@ resource staticWebApp 'Microsoft.Web/staticSites@2022-09-01' = {
 // ============================================================
 output acrLoginServer      string = acr.properties.loginServer
 output backendUrl          string = 'https://${backendApp.properties.defaultHostName}'
-output frontendUrl         string = 'https://${staticWebApp.properties.defaultHostname}'
+output frontendUrl         string = 'https://${frontendApp.properties.defaultHostName}'
 output sqlServerFqdn       string = sqlServer.properties.fullyQualifiedDomainName
 output keyVaultName        string = keyVault.name
 output appInsightsKey      string = appInsights.properties.InstrumentationKey
 output backendPrincipalId  string = backendApp.identity.principalId
+output frontendPrincipalId string = frontendApp.identity.principalId
