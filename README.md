@@ -7,9 +7,6 @@ Taskify is a modern, enterprise-grade task management application built with **R
 ### 🔐 Secure Login
 ![Login Page](./docs/screenshots/login.png)
 
-### 📊 Task Dashboard
-![Dashboard](./docs/screenshots/dashboard.png)
-
 ## 🚀 DevOps & Infrastructure
 
 ### 🏗️ Infrastructure Architecture
